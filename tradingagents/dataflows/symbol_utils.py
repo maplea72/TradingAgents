@@ -129,3 +129,36 @@ def normalize_symbol(raw: str) -> str:
 def is_yahoo_safe(symbol: str) -> bool:
     """True when ``symbol`` only contains characters Yahoo symbols use."""
     return bool(symbol) and _YAHOO_SAFE.fullmatch(symbol) is not None
+
+
+def is_china_market(symbol: str) -> bool:
+    """True when ``symbol`` is a Chinese A-share stock (Shanghai or Shenzhen).
+
+    Chinese A-shares use Yahoo Finance suffixes:
+      - .SS for Shanghai Stock Exchange
+      - .SZ for Shenzhen Stock Exchange
+
+    Examples: 600519.SS (Kweichow Moutai), 000001.SZ (Ping An Bank)
+    """
+    if not isinstance(symbol, str):
+        return False
+    upper = symbol.upper()
+    return upper.endswith(".SS") or upper.endswith(".SZ")
+
+
+def china_ticker_parts(symbol: str) -> tuple[str, str] | None:
+    """Split a Chinese A-share symbol into (exchange_prefix, numeric_code).
+
+    Returns the exchange prefix in the form Chinese sites use:
+      - ``sh`` for Shanghai (.SS)
+      - ``sz`` for Shenzhen (.SZ)
+
+    Returns ``None`` for non-Chinese symbols. Example: ``"600519.SS"`` ->
+    ``("sh", "600519")``; ``"000001.SZ"`` -> ``("sz", "000001")``.
+    """
+    if not is_china_market(symbol):
+        return None
+    upper = symbol.upper()
+    code, suffix = upper.rsplit(".", 1)
+    prefix = "sh" if suffix == "SS" else "sz"
+    return prefix, code

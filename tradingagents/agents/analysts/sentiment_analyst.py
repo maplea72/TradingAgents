@@ -40,7 +40,10 @@ from tradingagents.agents.utils.structured import (
     invoke_structured_or_freetext,
 )
 from tradingagents.dataflows.reddit import fetch_reddit_posts
+from tradingagents.dataflows.sina_finance import fetch_sina_finance_news
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
+from tradingagents.dataflows.symbol_utils import is_china_market
+from tradingagents.dataflows.xueqiu import fetch_xueqiu_posts
 
 
 def _seven_days_back(trade_date: str) -> str:
@@ -63,12 +66,21 @@ def create_sentiment_analyst(llm):
         start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
 
-        # Pre-fetch all three sources. Each fetcher degrades gracefully and
+        # Pre-fetch all sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
+        # For Chinese A-shares, swap the US-centric retail/community sources
+        # (StockTwits, Reddit) for Chinese-language equivalents (Xueqiu,
+        # Sina Finance) which actually cover those tickers.
         news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+        if is_china_market(ticker):
+            stocktwits_block = fetch_xueqiu_posts(ticker)
+            reddit_block = fetch_sina_finance_news(ticker)
+            social_label = "china"
+        else:
+            stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
+            reddit_block = fetch_reddit_posts(ticker)
+            social_label = "us"
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -77,6 +89,7 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            social_label=social_label,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -126,20 +139,31 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    social_label: str = "us",
 ) -> str:
-    """Assemble the sentiment-analyst system message with structured data blocks."""
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+    """Assemble the sentiment-analyst system message with structured data blocks.
 
-## Data sources (pre-fetched, in this prompt)
+    ``social_label`` selects the descriptions used for the two retail/community
+    blocks. ``"us"`` describes StockTwits + Reddit; ``"china"`` describes
+    Xueqiu + Sina Finance, which is what the node prefetches for ``.SS`` /
+    ``.SZ`` tickers.
+    """
+    if social_label == "china":
+        retail_section = f"""### Xueqiu (雪球) posts — China's largest retail-investor community
+Fast-moving signal. Posts are indexed by stock symbol (e.g. SH600519, SZ000001) and carry engagement metrics: retweets (↻), replies (c), and favorites (★). Treat high-engagement posts as more representative of community sentiment than low-engagement ones. Xueqiu skews toward active retail traders and tends to react quickly to news and price action.
 
-### News headlines — Yahoo Finance, past 7 days
-Institutional framing. Fact-driven, slower-moving signal.
+<start_of_xueqiu>
+{stocktwits_block}
+<end_of_xueqiu>
 
-<start_of_news>
-{news_block}
-<end_of_news>
+### Sina Finance (新浪财经) news — major Chinese financial news portal
+Per-symbol headline roll covering company-specific news, regulatory filings, and analyst commentary in Chinese. Headlines only — read them as event signal rather than opinion. Sina is a mainstream portal, so coverage trends institutional in framing even when the topic is retail-driven.
 
-### StockTwits messages — retail-trader social platform indexed by cashtag
+<start_of_sina>
+{reddit_block}
+<end_of_sina>"""
+    else:
+        retail_section = f"""### StockTwits messages — retail-trader social platform indexed by cashtag
 Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish / Bearish / no-label) plus the message body.
 
 <start_of_stocktwits>
@@ -151,21 +175,34 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 
 <start_of_reddit>
 {reddit_block}
-<end_of_reddit>
+<end_of_reddit>"""
+
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+
+## Data sources (pre-fetched, in this prompt)
+
+### News headlines — Yahoo Finance, past 7 days
+Institutional framing. Fact-driven, slower-moving signal.
+
+<start_of_news>
+{news_block}
+<end_of_news>
+
+{retail_section}
 
 ## How to analyze this data (best practices)
 
-1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
+1. **Read the retail-sentiment signal carefully.** Where the retail source carries explicit Bullish/Bearish tags (StockTwits), a 70/30 split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Where it does not (Xueqiu, Reddit, Sina), infer direction from the body text and engagement. Sample size matters — base rates on the actual message count, not percentages alone.
 
-2. **Look for cross-source divergences.** If news framing is bearish but StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
+2. **Look for cross-source divergences.** If news framing is bearish but the retail/community source is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
 
-3. **Weight Reddit posts by engagement.** A 400-upvote / 200-comment thread reflects community attention; a 3-upvote post is noise. Read the body excerpts for context — the title alone often misleads.
+3. **Weight community posts by engagement.** A 400-upvote / 200-comment Reddit thread, or a Xueqiu post with high retweets and replies, reflects community attention; a low-engagement post is noise. Read the body excerpts for context — the title alone often misleads.
 
-4. **Distinguish opinion from event.** A news headline ("Nvidia announces $500M Corning deal") is an event; a StockTwits post ("buying NVDA, this is going to moon") is opinion. Both are inputs but should be weighted differently in your conclusions.
+4. **Distinguish opinion from event.** A news headline ("Nvidia announces $500M Corning deal") is an event; a retail post ("buying NVDA, this is going to moon") is opinion. Both are inputs but should be weighted differently in your conclusions.
 
 5. **Identify recurring narrative themes.** What topic keeps coming up across sources? That's the dominant narrative driving current sentiment.
 
-6. **Be honest about data limits.** If StockTwits returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, the sentiment read is less robust — flag this explicitly in the `confidence` field and the narrative. If the sources are silent on a given subreddit, say so.
+6. **Be honest about data limits.** If a source returned only a handful of items, or one or more sources returned an "<unavailable>" placeholder, the sentiment read is less robust — flag this explicitly in the `confidence` field and the narrative.
 
 7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
 
