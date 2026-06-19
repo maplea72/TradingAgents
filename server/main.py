@@ -126,8 +126,12 @@ def healthz() -> dict[str, str]:
     dependencies=[Depends(require_api_key)],
     tags=["analyze"],
 )
-def analyze(req: AnalyzeRequest) -> AnalyzeSubmitted:
-    """Submit a new analysis job. Returns ``{job_id, status}`` immediately."""
+async def analyze(req: AnalyzeRequest) -> AnalyzeSubmitted:
+    """Submit a new analysis job. Returns ``{job_id, status}`` immediately.
+
+    ``async`` is required so ``submit_job`` sees a running event loop for
+    ``asyncio.create_task``; a sync handler would run in the threadpool.
+    """
     job = submit_job(
         ticker=req.ticker,
         trade_date=req.trade_date,
