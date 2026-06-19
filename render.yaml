@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: tradingagents-api
+    runtime: python
+    plan: starter
+    branch: main
+    healthCheckPath: /healthz
+    buildCommand: pip install --upgrade pip && pip install -e .
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: TRADINGAGENTS_API_KEY
+        sync: false  # set this manually in the Render dashboard
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
