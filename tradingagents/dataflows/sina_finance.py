@@ -37,15 +37,22 @@ _UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
-# The news list is a sequence of <a ...>headline</a><span>(YYYY-MM-DD HH:MM)</span>
-# entries inside the datelist <div>. Pair them with a single regex run over the
-# datelist block — it is the simplest reliable shape across pages.
+# Each entry inside <div class="datelist"><ul>…</ul></div> follows the shape:
+#
+#   &nbsp;&nbsp;&nbsp;&nbsp;YYYY-MM-DD&nbsp;HH:MM&nbsp;&nbsp;
+#   <a target='_blank' href='URL'>headline</a> <br>
+#
+# i.e. date/time appear *before* the link, separated by HTML &nbsp; entities,
+# and attribute values use single quotes. Match accordingly; allow either
+# quote style on href so the regex survives a future markup tweak.
 _DATELIST_RE = re.compile(
-    r'<div[^>]*class="datelist"[^>]*>(.*?)</div>', re.DOTALL
+    r'<div[^>]*class="datelist"[^>]*>(?P<body>.*?)</div>', re.DOTALL
 )
 _ENTRY_RE = re.compile(
-    r'<a[^>]+href="(?P<url>[^"]+)"[^>]*>(?P<title>[^<]+)</a>\s*'
-    r'\((?P<date>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\)'
+    r'(?P<date>\d{4}-\d{2}-\d{2})&nbsp;(?P<time>\d{2}:\d{2})'
+    r'(?:&nbsp;|\s)*'
+    r'<a[^>]+href=["\'](?P<url>[^"\']+)["\'][^>]*>(?P<title>[^<]+)</a>',
+    re.DOTALL,
 )
 
 
@@ -86,15 +93,15 @@ def fetch_sina_finance_news(ticker: str, limit: int = 20, timeout: float = 10.0)
     if not block_match:
         return f"<no Sina Finance news found for {sina_symbol}>"
 
-    entries = list(_ENTRY_RE.finditer(block_match.group(1)))
+    entries = list(_ENTRY_RE.finditer(block_match.group("body")))
     if not entries:
         return f"<no Sina Finance news found for {sina_symbol}>"
 
     lines = []
     for m in entries[:limit]:
         title = m.group("title").strip()
-        date = m.group("date").strip()
-        lines.append(f"[{date}] {title}")
+        timestamp = f"{m.group('date')} {m.group('time')}"
+        lines.append(f"[{timestamp}] {title}")
 
     header = (
         f"Sina Finance — {len(lines)} recent headlines for {sina_symbol}:"

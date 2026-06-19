@@ -39,11 +39,11 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.eastmoney_guba import fetch_eastmoney_guba_posts
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.sina_finance import fetch_sina_finance_news
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 from tradingagents.dataflows.symbol_utils import is_china_market
-from tradingagents.dataflows.xueqiu import fetch_xueqiu_posts
 
 
 def _seven_days_back(trade_date: str) -> str:
@@ -74,7 +74,7 @@ def create_sentiment_analyst(llm):
         # Sina Finance) which actually cover those tickers.
         news_block = get_news.func(ticker, start_date, end_date)
         if is_china_market(ticker):
-            stocktwits_block = fetch_xueqiu_posts(ticker)
+            stocktwits_block = fetch_eastmoney_guba_posts(ticker)
             reddit_block = fetch_sina_finance_news(ticker)
             social_label = "china"
         else:
@@ -149,12 +149,12 @@ def _build_system_message(
     ``.SZ`` tickers.
     """
     if social_label == "china":
-        retail_section = f"""### Xueqiu (雪球) posts — China's largest retail-investor community
-Fast-moving signal. Posts are indexed by stock symbol (e.g. SH600519, SZ000001) and carry engagement metrics: retweets (↻), replies (c), and favorites (★). Treat high-engagement posts as more representative of community sentiment than low-engagement ones. Xueqiu skews toward active retail traders and tends to react quickly to news and price action.
+        retail_section = f"""### Eastmoney Guba (东方财富股吧) posts — China's largest stock-discussion forum
+Fast-moving signal. Posts are organised per ticker and carry engagement metrics: views (👁) and replies (c). Treat high-view / high-reply posts as more representative of community sentiment than low-engagement ones. Guba skews toward active retail traders and tends to react quickly to news and price action; expect a mix of news-aggregator accounts (e.g. "贵州茅台资讯") and individual retail posters.
 
-<start_of_xueqiu>
+<start_of_guba>
 {stocktwits_block}
-<end_of_xueqiu>
+<end_of_guba>
 
 ### Sina Finance (新浪财经) news — major Chinese financial news portal
 Per-symbol headline roll covering company-specific news, regulatory filings, and analyst commentary in Chinese. Headlines only — read them as event signal rather than opinion. Sina is a mainstream portal, so coverage trends institutional in framing even when the topic is retail-driven.
